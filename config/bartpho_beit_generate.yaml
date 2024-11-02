@@ -7,7 +7,7 @@ TRAINING:
   WORKERS: 0
   METRIC_BEST: em
   PATIENCE: 5
-  SAVE_PATH: /content/drive/LV/1.0/
+  SAVE_PATH: /content/cross_attention/checkpoints/
 
 MODEL:
   NAME: bartpho_beit_generate
