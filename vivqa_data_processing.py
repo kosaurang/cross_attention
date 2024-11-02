@@ -50,6 +50,7 @@ def load_and_clean_data(train_path, test_path):
 
     train_df.reset_index(drop=True, inplace=True)
     valid_df.reset_index(drop=True, inplace=True)
+    test_df.reset_index(drop=True, inplace=True)
         
     print(f'Train shape: {train_df.shape}')
     print(f'Test shape: {test_df.shape}')
