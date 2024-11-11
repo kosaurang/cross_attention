@@ -1,4 +1,13 @@
 from common_imports import *
+import torch.nn.functional as F
+from transformers.models.mbart.modeling_mbart import (
+    MBartLearnedPositionalEmbedding,
+    MBartEncoderLayer, MBartEncoder, MBartDecoder,
+    MBartModel, MBartForConditionalGeneration,
+    MBartConfig,
+    ACT2FN,
+    shift_tokens_right, _expand_mask
+)
 
 class JointEncoder(MBartEncoder):
     """
