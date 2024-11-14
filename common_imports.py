@@ -15,7 +15,14 @@ from torch.utils.data import Dataset, DataLoader
 #model
 from tqdm import tqdm
 from transformers import MBartPreTrainedModel, MBartConfig, AutoModel, AutoConfig, AutoTokenizer, BeitImageProcessor
-
+from transformers.models.mbart.modeling_mbart import (
+    MBartLearnedPositionalEmbedding,
+    MBartEncoderLayer, MBartEncoder, MBartDecoder,
+    MBartModel, MBartForConditionalGeneration,
+    MBartConfig,
+    ACT2FN,
+    shift_tokens_right, _expand_mask
+)
 from transformers.modeling_outputs  import (
     ModelOutput,
     BaseModelOutput,
