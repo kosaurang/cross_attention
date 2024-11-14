@@ -1,5 +1,13 @@
 from common_imports import *
 from models.JointEncoder import JointEncoder
+from transformers.models.mbart.modeling_mbart import (
+    MBartLearnedPositionalEmbedding,
+    MBartEncoderLayer, MBartEncoder, MBartDecoder,
+    MBartModel, MBartForConditionalGeneration,
+    MBartConfig,
+    ACT2FN,
+    shift_tokens_right, _expand_mask
+)
 
 class VLBartModel(MBartModel):
     def __init__(self, config: MBartConfig):
