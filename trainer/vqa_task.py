@@ -54,8 +54,7 @@ class VQA_Task:
             )
         
         # Optimizer với gradient clipping
-        self.optimizer = self.get_optimizer(config)
-        self.scheduler = self.get_scheduler()
+        self.optimizer = self.get_optimizer(config)        
         self.compute_score = ScoreCalculator()
         
         # Khởi tạo WandB chỉ trên main process
@@ -130,18 +129,15 @@ class VQA_Task:
             torch.cuda.empty_cache()
         gc.collect()
         
-    def get_scheduler(self):
-        """
-        Khởi tạo learning rate scheduler
-        Returns:
-            torch.optim.lr_scheduler: Learning rate scheduler
-        """
+    def get_scheduler(self, train_loader):
+        steps_per_epoch = len(train_loader) // self.gradient_accumulation_steps
+        
         return torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             max_lr=self.learning_rate,
             epochs=self.num_epochs,
-            steps_per_epoch=self.gradient_accumulation_steps,
-            pct_start=0.1,  # Warm-up phase
+            steps_per_epoch=steps_per_epoch,
+            pct_start=0.1,
             div_factor=25,
             final_div_factor=1000,
             anneal_strategy='cos'
@@ -287,7 +283,8 @@ class VQA_Task:
         # valid_loader = DataLoader(valid_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
         train_loader = self.get_data_loader(train_dataset, is_train=True)
         valid_loader = self.get_data_loader(valid_dataset, is_train=False)
-
+        
+        self.scheduler = self.get_scheduler(train_loader)
         # Load checkpoint if exists
         initial_epoch, best_score = self.load_checkpoint(
             os.path.join(self.save_path, 'last_model.pth')
@@ -411,3 +408,102 @@ class VQA_Task:
             metrics['accuracy'] /= batch_count
         
         return metrics
+    def validate_epoch(self, valid_loader):
+        """
+        Thực hiện validation epoch
+        Args:
+            valid_loader: DataLoader cho validation dataset
+        Returns:
+            dict: Dictionary chứa các metrics validation
+        """
+        self.base_model.eval()
+        metrics = {'loss': 0., 'accuracy': 0.}
+        batch_count = 0
+        
+        with torch.no_grad(), \
+             tqdm(desc='Validation', unit='it', total=len(valid_loader), disable=not self.is_main_process) as pbar:
+            
+            for it, item in enumerate(valid_loader):
+                # Kiểm tra batch có dữ liệu không
+                if not item or len(item) == 0:
+                    continue
+                    
+                try:
+                    # Đảm bảo dữ liệu ở đúng device
+                    if isinstance(item['image'], torch.Tensor):
+                        item['image'] = item['image'].to(self.device)
+                    
+                    # Forward pass với autocast để tối ưu memory và speed
+                    with self.autocast:
+                        logits, loss = self.base_model(
+                            item['question'],
+                            item['image'],
+                            item['answer']
+                        )
+                    
+                    metrics['loss'] += loss.item()
+                    
+                    # Tính accuracy cho batch
+                    pred_answers = self.base_model(item['question'], item['image'])
+                    batch_accuracy = self.calculate_accuracy(pred_answers, item['answer'])
+                    metrics['accuracy'] += batch_accuracy
+                    batch_count += 1
+                    
+                    if self.is_main_process:
+                        pbar.set_postfix({
+                            'loss': f"{metrics['loss']/(it+1):.4f}",
+                            'accuracy': f"{metrics['accuracy']/batch_count:.4f}"
+                        })
+                        pbar.update()
+                    
+                except Exception as e:
+                    print(f"Error processing validation batch {it}: {str(e)}")
+                    print(f"Batch data details: {item}")
+                    print("Traceback details:")
+                    traceback.print_exc()
+                    continue
+                
+                # Định kỳ clear memory
+                if it % 50 == 49:
+                    torch.cuda.synchronize()
+                    self.clear_memory()
+        
+        # Tính final metrics
+        if batch_count > 0:  # Chỉ tính metrics nếu có ít nhất một batch thành công
+            if self.distributed:
+                # Gather metrics từ tất cả processes
+                dist.all_reduce(torch.tensor(metrics['loss']).to(self.device))
+                dist.all_reduce(torch.tensor(metrics['accuracy']).to(self.device))
+                metrics['loss'] /= self.world_size
+                metrics['accuracy'] /= self.world_size
+            
+            metrics['loss'] /= len(valid_loader)
+            metrics['accuracy'] /= batch_count
+        
+        return metrics
+    
+    def save_checkpoints(self, epoch, valid_metrics, best_score):
+        """
+        Lưu checkpoints và kiểm tra early stopping
+        Args:
+            epoch: Current epoch number
+            valid_metrics: Validation metrics
+            best_score: Best score so far
+        Returns:
+            int: Số epochs không cải thiện
+        """
+        current_score = valid_metrics['accuracy'] if self.best_metric == 'accuracy' else -valid_metrics['loss']
+        threshold = 0
+        
+        # Lưu model state
+        self.save_checkpoint(epoch, current_score)
+        
+        # Kiểm tra xem có phải best model không
+        if current_score > best_score:
+            self.save_checkpoint(epoch, current_score, is_best=True)
+            best_score = current_score
+            threshold = 0
+        else:
+            threshold += 1
+            
+        return threshold
