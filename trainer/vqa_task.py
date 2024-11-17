@@ -27,7 +27,7 @@ class VQA_Task:
         self.learning_rate = config.TRAINING.LEARNING_RATE
         self.weight_decay = config.TRAINING.WEIGHT_DECAY
         self.batch_size = config.TRAINING.BATCH_SIZE
-        self.num_workers = config.TRAINING.WORKERS
+        self.num_workers = os.cpu_count()
         self.gradient_accumulation_steps = 4
         
         # Khởi tạo autocast và scaler
@@ -38,9 +38,7 @@ class VQA_Task:
         self.prefetch_factor = 2
         self.persistent_workers = True
 
-        # Khởi tạo WandB chỉ trên main process
-        if self.is_main_process:
-            self.init_wandb(config)
+        
 
         self.tokenizer = Bart_tokenizer(config.MODEL)
         self.base_model = MBart_BEiT_Model(config.MODEL).to(self.device)
@@ -58,6 +56,95 @@ class VQA_Task:
         self.optimizer = self.get_optimizer(config)
         self.scheduler = self.get_scheduler()
         self.compute_score = ScoreCalculator()
+        
+        # Khởi tạo WandB chỉ trên main process
+        if self.is_main_process:
+            self.init_wandb(config)
+        
+    def init_wandb(self, config):
+        """
+        Khởi tạo Weights & Biases logging
+        Args:
+            config: Configuration object containing model and training parameters
+        """
+        wandb.init(
+            project="VQA-Project",  # Tên project của bạn trên WandB
+            name=config.MODEL.NAME,  # Tên run, sử dụng tên model
+            config={
+                "learning_rate": self.learning_rate,
+                "batch_size": self.batch_size,
+                "epochs": self.num_epochs,
+                "weight_decay": self.weight_decay,
+                "model_name": config.MODEL.NAME,
+                "gradient_accumulation_steps": self.gradient_accumulation_steps,
+                "architecture": config.MODEL.ARCHITECTURE if hasattr(config.MODEL, 'ARCHITECTURE') else "Not specified",
+                "optimizer": "AdamW",
+                "scheduler": "linear_warmup_decay",
+                "distributed_training": self.distributed,
+                "world_size": self.world_size
+            }
+        )
+        
+        # Log model graph
+        if hasattr(self.base_model, 'module'):
+            wandb.watch(
+                self.base_model.module,
+                log="gradients",
+                log_freq=100,
+                log_graph=True
+            )
+        else:
+            wandb.watch(
+                self.base_model,
+                log="gradients",
+                log_freq=100,
+                log_graph=True
+            )
+
+    def log_metrics(self, epoch, train_metrics, valid_metrics):
+        """
+        Log metrics to WandB
+        Args:
+            epoch: Current epoch number
+            train_metrics: Dictionary containing training metrics
+            valid_metrics: Dictionary containing validation metrics
+        """
+        if not self.is_main_process:
+            return
+            
+        wandb.log({
+            "epoch": epoch,
+            "train/loss": train_metrics['loss'],
+            "train/accuracy": train_metrics['accuracy'],
+            "valid/loss": valid_metrics['loss'],
+            "valid/accuracy": valid_metrics['accuracy'],
+            "learning_rate": self.scheduler.get_last_lr()[0]
+        })
+
+    def clear_memory(self):
+        """
+        Clear unused memory caches
+        """
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+        
+    def get_scheduler(self):
+        """
+        Khởi tạo learning rate scheduler
+        Returns:
+            torch.optim.lr_scheduler: Learning rate scheduler
+        """
+        return torch.optim.lr_scheduler.OneCycleLR(
+            self.optimizer,
+            max_lr=self.learning_rate,
+            epochs=self.num_epochs,
+            steps_per_epoch=self.gradient_accumulation_steps,
+            pct_start=0.1,  # Warm-up phase
+            div_factor=25,
+            final_div_factor=1000,
+            anneal_strategy='cos'
+        )
 
     def setup_distributed(self):
         """Thiết lập distributed training"""
@@ -104,28 +191,105 @@ class VQA_Task:
         )
 
     def get_data_loader(self, dataset, is_train=True):
-        """Tạo optimized data loader"""
-        sampler = DistributedSampler(dataset) if self.distributed else None
-        
-        return DataLoader(
-            dataset,
-            batch_size=self.batch_size,
-            shuffle=(sampler is None) and is_train,
-            sampler=sampler,
-            num_workers=self.num_workers,
-            pin_memory=True,
-            prefetch_factor=self.prefetch_factor,
-            persistent_workers=self.persistent_workers,
-            drop_last=is_train
-        )
+            """
+            Tạo optimized data loader với error handling
+            Args:
+                dataset: Dataset to load
+                is_train: Whether this is for training
+            Returns:
+                DataLoader: Configured data loader
+            """
+            def collate_fn(batch):
+                """
+                Xử lý batch data an toàn
+                """
+                # Lọc bỏ các mẫu None
+                batch = [item for item in batch if item is not None]
+                if not batch:
+                    return {}
+                
+                # Khởi tạo các list để chứa dữ liệu
+                questions = []
+                images = []
+                answers = []
+                
+                # Thu thập dữ liệu từ batch
+                for item in batch:
+                    try:
+                        questions.append(item.get('question', ''))
+                        images.append(item.get('image', None))
+                        answers.append(item.get('answer', ''))
+                    except Exception as e:
+                        print(f"Error processing batch item: {str(e)}")
+                        continue
+                
+                # Kiểm tra xem có đủ dữ liệu không
+                if not questions or not images or not answers:
+                    return {}
+                    
+                return {
+                    'question': questions,
+                    'image': torch.stack(images) if isinstance(images[0], torch.Tensor) else images,
+                    'answer': answers
+                }
+    
+            sampler = DistributedSampler(dataset) if self.distributed else None
+            
+            # Base loader config
+            loader_config = {
+                'dataset': dataset,
+                'batch_size': self.batch_size,
+                'shuffle': (sampler is None) and is_train,
+                'sampler': sampler,
+                'pin_memory': True,
+                'drop_last': is_train,
+                'collate_fn': collate_fn
+            }
+            
+            # Add multiprocessing configs only if num_workers > 0
+            if self.num_workers > 0:
+                loader_config.update({
+                    'num_workers': self.num_workers,
+                    'prefetch_factor': self.prefetch_factor,
+                    'persistent_workers': self.persistent_workers
+                })
+            
+            return DataLoader(**loader_config)
+    
+    def load_checkpoint(self, checkpoint_path):
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path)
+            self.base_model.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            return checkpoint['epoch'] + 1, checkpoint['score']
+        return 0, 0.0
+
+    def save_checkpoint(self, epoch, score, is_best=False):
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.base_model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'score': score
+        }
+        filename = 'best_model.pth' if is_best else 'last_model.pth'
+        torch.save(checkpoint, os.path.join(self.save_path, filename))
+    def calculate_accuracy(self, pred_answers, true_answers):
+            """Tính toán accuracy dựa trên exact match"""
+            correct = sum(1 for pred, true in zip(pred_answers, true_answers) if pred.strip().lower() == true.strip().lower())
+            return correct / len(true_answers)
 
     def training(self, train_dataset, valid_dataset):
         # Tạo optimized data loaders
+        
+        # train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
+        # valid_loader = DataLoader(valid_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
         train_loader = self.get_data_loader(train_dataset, is_train=True)
         valid_loader = self.get_data_loader(valid_dataset, is_train=False)
 
         # Load checkpoint if exists
-        initial_epoch, best_score = self.load_checkpoint()
+        initial_epoch, best_score = self.load_checkpoint(
+            os.path.join(self.save_path, 'last_model.pth')
+        )
         
         # Training loop với các optimization
         for epoch in range(initial_epoch, self.num_epochs + initial_epoch):
@@ -157,8 +321,6 @@ class VQA_Task:
 
     def train_epoch(self, train_loader, epoch):
         self.base_model.train()
-        
-        # Sử dụng torch.cuda.Stream để overlap computation và data transfer
         train_stream = torch.cuda.Stream()
         
         metrics = {'loss': 0., 'accuracy': 0.}
@@ -167,52 +329,65 @@ class VQA_Task:
         
         with tqdm(desc='Training', unit='it', total=len(train_loader), disable=not self.is_main_process) as pbar:
             for it, item in enumerate(train_loader):
-                # Prefetch next batch
-                if it + 1 < len(train_loader):
-                    with torch.cuda.stream(train_stream):
-                        next_item = next(iter(train_loader))
-                
-                # Forward pass với optimization
-                with self.autocast:
-                    logits, loss = self.base_model(
-                        item['question'], 
-                        item['image'],
-                        item['answer']
-                    )
-                    loss = loss / self.gradient_accumulation_steps
-                
-                # Backward pass với optimization
-                self.scaler.scale(loss).backward()
-                
-                if (it + 1) % self.gradient_accumulation_steps == 0:
-                    self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(
-                        self.base_model.parameters(), 
-                        max_norm=1.0
-                    )
+                # Kiểm tra xem batch có dữ liệu không
+                if not item or len(item) == 0:
+                    continue
                     
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                    self.optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
-                    self.scheduler.step()
-                    optimizer_step += 1
+                try:
+                    # Đảm bảo dữ liệu ở đúng device
+                    if isinstance(item['image'], torch.Tensor):
+                        item['image'] = item['image'].to(self.device)
+                    
+                    # Prefetch next batch
+                    if it + 1 < len(train_loader):
+                        with torch.cuda.stream(train_stream):
+                            next_item = next(iter(train_loader))
+                    
+                    # Forward pass với optimization và error handling
+                    with self.autocast:
+                        logits, loss = self.base_model(
+                            item['question'], 
+                            item['image'],
+                            item['answer']
+                        )
+                        loss = loss / self.gradient_accumulation_steps
+                    
+                    # Backward pass với optimization
+                    self.scaler.scale(loss).backward()
+                    
+                    if (it + 1) % self.gradient_accumulation_steps == 0:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(
+                            self.base_model.parameters(), 
+                            max_norm=1.0
+                        )
+                        
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                        self.optimizer.zero_grad(set_to_none=True)
+                        self.scheduler.step()
+                        optimizer_step += 1
+                    
+                    metrics['loss'] += loss.item() * self.gradient_accumulation_steps
+                    
+                    # Calculate metrics periodically
+                    if it % 100 == 0:
+                        with torch.no_grad():
+                            pred_answers = self.base_model(item['question'], item['image'])
+                            batch_accuracy = self.calculate_accuracy(pred_answers, item['answer'])
+                            metrics['accuracy'] += batch_accuracy
+                            batch_count += 1
+                    
+                    if self.is_main_process:
+                        pbar.set_postfix({
+                            'loss': f"{metrics['loss']/(it+1):.4f}",
+                            'lr': self.scheduler.get_last_lr()[0]
+                        })
+                        pbar.update()
                 
-                metrics['loss'] += loss.item() * self.gradient_accumulation_steps
-                
-                # Calculate metrics periodically
-                if it % 100 == 0:
-                    with torch.no_grad():
-                        pred_answers = self.base_model(item['question'], item['image'])
-                        batch_accuracy = self.calculate_accuracy(pred_answers, item['answer'])
-                        metrics['accuracy'] += batch_accuracy
-                        batch_count += 1
-                
-                if self.is_main_process:
-                    pbar.set_postfix({
-                        'loss': f"{metrics['loss']/(it+1):.4f}",
-                        'lr': self.scheduler.get_last_lr()[0]
-                    })
-                    pbar.update()
+                except Exception as e:
+                    print(f"Error processing batch {it}: {str(e)}")
+                    continue
                 
                 # Synchronize streams periodically
                 if it % 50 == 49:
@@ -220,13 +395,14 @@ class VQA_Task:
                     self.clear_memory()
         
         # Calculate final metrics
-        if self.distributed:
-            dist.all_reduce(torch.tensor(metrics['loss']).to(self.device))
-            dist.all_reduce(torch.tensor(metrics['accuracy']).to(self.device))
-            metrics['loss'] /= self.world_size
-            metrics['accuracy'] /= self.world_size
-        
-        metrics['loss'] /= len(train_loader)
-        metrics['accuracy'] = metrics['accuracy'] / batch_count if batch_count > 0 else 0
+        if batch_count > 0:  # Chỉ tính metrics nếu có ít nhất một batch thành công
+            if self.distributed:
+                dist.all_reduce(torch.tensor(metrics['loss']).to(self.device))
+                dist.all_reduce(torch.tensor(metrics['accuracy']).to(self.device))
+                metrics['loss'] /= self.world_size
+                metrics['accuracy'] /= self.world_size
+            
+            metrics['loss'] /= len(train_loader)
+            metrics['accuracy'] /= batch_count
         
         return metrics
