@@ -12,6 +12,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 import torch.backends.cudnn as cudnn
+import traceback
 
 class VQA_Task:
     def __init__(self, config):
@@ -221,6 +222,7 @@ class VQA_Task:
                         answers.append(item.get('answer', ''))
                     except Exception as e:
                         print(f"Error processing batch item: {str(e)}")
+                        print(f"Question: {item.get('question', None)}, Image: {item.get('image', None)}, Answer: {item.get('answer', None)}")
                         continue
                 
                 # Kiểm tra xem có đủ dữ liệu không
@@ -387,6 +389,9 @@ class VQA_Task:
                 
                 except Exception as e:
                     print(f"Error processing batch {it}: {str(e)}")
+                    print(f"Batch data details: {item}")
+                    print("Traceback details:")
+                    traceback.print_exc()  # In chi tiết stack trace
                     continue
                 
                 # Synchronize streams periodically
