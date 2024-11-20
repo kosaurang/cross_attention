@@ -130,16 +130,28 @@ class VQA_Task:
         gc.collect()
         
     def get_scheduler(self, train_loader):
-        steps_per_epoch = len(train_loader) // self.gradient_accumulation_steps
+        """
+        Tạo learning rate scheduler với các biện pháp bảo vệ
+        Args:
+            train_loader: DataLoader cho training dataset
+        Returns:
+            OneCycleLR scheduler
+        """
+        # Tính toán tổng số steps cho mỗi epoch
+        num_training_steps = len(train_loader)
+        num_optimization_steps = num_training_steps // self.gradient_accumulation_steps
+        
+        print(f"Number of training steps per epoch: {num_training_steps}")
+        print(f"Number of optimization steps per epoch: {num_optimization_steps}")
+        print(f"Total steps for all epochs: {num_optimization_steps * self.num_epochs}")
         
         return torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             max_lr=self.learning_rate,
-            epochs=self.num_epochs,
-            steps_per_epoch=steps_per_epoch,
+            total_steps=num_optimization_steps * self.num_epochs,  # Sử dụng total_steps thay vì epochs
             pct_start=0.1,
-            div_factor=25,
-            final_div_factor=1000,
+            div_factor=25.0,
+            final_div_factor=1000.0,
             anneal_strategy='cos'
         )
 
@@ -277,45 +289,37 @@ class VQA_Task:
             return correct / len(true_answers)
 
     def training(self, train_dataset, valid_dataset):
-        # Tạo optimized data loaders
-        
-        # train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
-        # valid_loader = DataLoader(valid_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
         train_loader = self.get_data_loader(train_dataset, is_train=True)
         valid_loader = self.get_data_loader(valid_dataset, is_train=False)
         
-        self.scheduler = self.get_scheduler(train_loader)
-        # Load checkpoint if exists
         initial_epoch, best_score = self.load_checkpoint(
             os.path.join(self.save_path, 'last_model.pth')
         )
         
-        # Training loop với các optimization
         for epoch in range(initial_epoch, self.num_epochs + initial_epoch):
             if self.distributed:
                 train_loader.sampler.set_epoch(epoch)
+                
+            # Tạo mới scheduler cho mỗi epoch
+            self.scheduler = self.get_scheduler(train_loader)
             
-            # Training phase với các optimization
+            # Training phase
             train_metrics = self.train_epoch(train_loader, epoch)
             
             # Validation phase
             valid_metrics = self.validate_epoch(valid_loader)
             
-            # Log và save chỉ trên main process
             if self.is_main_process:
                 self.log_metrics(epoch, train_metrics, valid_metrics)
                 threshold = self.save_checkpoints(epoch, valid_metrics, best_score)
                 
-                # Early stopping check
                 if threshold >= self.patience:
                     print(f"Early stopping after epoch {epoch + 1}")
                     break
             
-            # Synchronize processes
             if self.distributed:
                 dist.barrier()
             
-            # Clear memory
             self.clear_memory()
 
     def train_epoch(self, train_loader, epoch):
@@ -324,11 +328,14 @@ class VQA_Task:
         
         metrics = {'loss': 0., 'accuracy': 0.}
         batch_count = 0
-        optimizer_step = 0
+        step_count = 0
+        
+        # Tính tổng số optimization steps cho epoch hiện tại
+        total_steps = len(train_loader) // self.gradient_accumulation_steps
+        accumulation_counter = 0
         
         with tqdm(desc='Training', unit='it', total=len(train_loader), disable=not self.is_main_process) as pbar:
             for it, item in enumerate(train_loader):
-                # Kiểm tra xem batch có dữ liệu không
                 if not item or len(item) == 0:
                     continue
                     
@@ -354,18 +361,27 @@ class VQA_Task:
                     # Backward pass với optimization
                     self.scaler.scale(loss).backward()
                     
-                    if (it + 1) % self.gradient_accumulation_steps == 0:
-                        self.scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(
-                            self.base_model.parameters(), 
-                            max_norm=1.0
-                        )
+                    accumulation_counter += 1
+                    
+                    # Update model weights và scheduler mỗi gradient_accumulation_steps
+                    if accumulation_counter >= self.gradient_accumulation_steps:
+                        # Kiểm tra xem đã đạt đến total_steps chưa
+                        if step_count < total_steps:
+                            self.scaler.unscale_(self.optimizer)
+                            torch.nn.utils.clip_grad_norm_(
+                                self.base_model.parameters(), 
+                                max_norm=1.0
+                            )
+                            
+                            self.scaler.step(self.optimizer)
+                            self.scaler.update()
+                            self.optimizer.zero_grad(set_to_none=True)
+                            
+                            # Step scheduler
+                            self.scheduler.step()
+                            step_count += 1
                         
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                        self.optimizer.zero_grad(set_to_none=True)
-                        self.scheduler.step()
-                        optimizer_step += 1
+                        accumulation_counter = 0
                     
                     metrics['loss'] += loss.item() * self.gradient_accumulation_steps
                     
@@ -377,18 +393,20 @@ class VQA_Task:
                             metrics['accuracy'] += batch_accuracy
                             batch_count += 1
                     
+                    current_lr = self.scheduler.get_last_lr()[0] if step_count < total_steps else self.scheduler.get_last_lr()[-1]
+                    
                     if self.is_main_process:
                         pbar.set_postfix({
                             'loss': f"{metrics['loss']/(it+1):.4f}",
-                            'lr': self.scheduler.get_last_lr()[0]
+                            'lr': f"{current_lr:.1e}",
+                            'steps': f"{step_count}/{total_steps}"
                         })
                         pbar.update()
                 
                 except Exception as e:
-                    print(f"Error processing batch {it}: {str(e)}")
-                    print(f"Batch data details: {item}")
-                    print("Traceback details:")
-                    traceback.print_exc()  # In chi tiết stack trace
+                    print(f"Error in batch {it}: {str(e)}")
+                    print(f"Current step: {step_count}, Total steps: {total_steps}")
+                    traceback.print_exc()
                     continue
                 
                 # Synchronize streams periodically
@@ -396,18 +414,33 @@ class VQA_Task:
                     torch.cuda.synchronize()
                     self.clear_memory()
         
-        # Calculate final metrics
-        if batch_count > 0:  # Chỉ tính metrics nếu có ít nhất một batch thành công
-            if self.distributed:
-                dist.all_reduce(torch.tensor(metrics['loss']).to(self.device))
-                dist.all_reduce(torch.tensor(metrics['accuracy']).to(self.device))
-                metrics['loss'] /= self.world_size
-                metrics['accuracy'] /= self.world_size
-            
-            metrics['loss'] /= len(train_loader)
-            metrics['accuracy'] /= batch_count
-        
         return metrics
+
+    def get_scheduler(self, train_loader):
+        """
+        Tạo learning rate scheduler với các biện pháp bảo vệ
+        Args:
+            train_loader: DataLoader cho training dataset
+        Returns:
+            OneCycleLR scheduler
+        """
+        # Tính toán số steps chính xác
+        total_steps = len(train_loader) // self.gradient_accumulation_steps
+        
+        print(f"\nScheduler Configuration:")
+        print(f"Total batches per epoch: {len(train_loader)}")
+        print(f"Gradient accumulation steps: {self.gradient_accumulation_steps}")
+        print(f"Total optimization steps: {total_steps}")
+        
+        return torch.optim.lr_scheduler.OneCycleLR(
+            self.optimizer,
+            max_lr=self.learning_rate,
+            total_steps=total_steps,
+            pct_start=0.1,
+            div_factor=25.0,
+            final_div_factor=1000.0,
+            anneal_strategy='cos'
+        )
     def validate_epoch(self, valid_loader):
         """
         Thực hiện validation epoch
