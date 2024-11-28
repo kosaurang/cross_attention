@@ -292,9 +292,7 @@ class VQA_Task:
         train_loader = self.get_data_loader(train_dataset, is_train=True)
         valid_loader = self.get_data_loader(valid_dataset, is_train=False)
         
-        initial_epoch, best_score = self.load_checkpoint(
-            os.path.join(self.save_path, 'last_model.pth')
-        )
+        initial_epoch, best_score = self.load_checkpoint_from_wandb()
         
         for epoch in range(initial_epoch, self.num_epochs + initial_epoch):
             if self.distributed:
