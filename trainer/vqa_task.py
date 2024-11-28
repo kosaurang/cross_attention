@@ -514,29 +514,95 @@ class VQA_Task:
             metrics['accuracy'] /= batch_count
         
         return metrics
-    
-    def save_checkpoints(self, epoch, valid_metrics, best_score):
+    def save_checkpoint_to_wandb(self, checkpoint, name):
         """
-        Lưu checkpoints và kiểm tra early stopping
+        Save checkpoint to WandB
         Args:
-            epoch: Current epoch number
-            valid_metrics: Validation metrics
-            best_score: Best score so far
-        Returns:
-            int: Số epochs không cải thiện
+            checkpoint: Dictionary containing model checkpoint
+            name: Name of the checkpoint file
         """
+        if not self.is_main_process:
+            return
+    
+        # Create artifact
+        artifact = wandb.Artifact(
+            name=f"vqa_checkpoint_{name}",
+            type="model",
+            metadata={
+                "epoch": checkpoint['epoch'],
+                "score": checkpoint['score']
+            }
+        )
+    
+        # Save checkpoint temporarily
+        temp_path = os.path.join(self.save_path, f"temp_{name}_checkpoint.pth")
+        torch.save(checkpoint, temp_path)
+    
+        # Add checkpoint to artifact
+        artifact.add_file(temp_path)
+        wandb.log_artifact(artifact)
+    
+        # Remove temporary file
+        os.remove(temp_path)
+    
+    def load_checkpoint_from_wandb(self, artifact_name=None):
+        """
+        Load checkpoint from WandB
+        Args:
+            artifact_name: Optional specific artifact name to load
+        Returns:
+            Tuple of (starting_epoch, best_score) or (0, 0.0) if no checkpoint found
+        """
+        if not self.is_main_process:
+            return 0, 0.0
+    
+        try:
+            # If no specific artifact name, try to get the latest
+            if artifact_name is None:
+                artifact = wandb.use_artifact('vqa_checkpoint_best:latest')
+            else:
+                artifact = wandb.use_artifact(artifact_name)
+    
+            # Download artifact
+            artifact_dir = artifact.download(self.save_path)
+            checkpoint_path = os.path.join(artifact_dir, os.listdir(artifact_dir)[0])
+    
+            # Load checkpoint
+            checkpoint = torch.load(checkpoint_path)
+            self.base_model.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+            return checkpoint['epoch'] + 1, checkpoint['score']
+    
+        except Exception as e:
+            print(f"No WandB checkpoint found: {e}")
+            return 0, 0.0    
+    def save_checkpoints(self, epoch, valid_metrics, best_score):
         current_score = valid_metrics['accuracy'] if self.best_metric == 'accuracy' else -valid_metrics['loss']
         threshold = 0
         
         # Lưu model state
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.base_model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'score': current_score
+        }
+        
         self.save_checkpoint(epoch, current_score)
         
         # Kiểm tra xem có phải best model không
         if current_score > best_score:
+            # Lưu best checkpoint
             self.save_checkpoint(epoch, current_score, is_best=True)
+            
+            # Save best checkpoint to WandB
+            if self.is_main_process:
+                self.save_checkpoint_to_wandb(checkpoint, 'best')
+            
             best_score = current_score
             threshold = 0
         else:
             threshold += 1
-            
+        
         return threshold
