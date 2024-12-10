@@ -1,5 +1,6 @@
 # models/vqa_model.py
 from common_imports import *
+from utils.device_utils import GLOBAL_DEVICE, select_device
 from models.Vision_Encode_Pixel import Vision_Encode_Pixel
 from models.Bart_Encode_Feature import Bart_Encode_Feature, Bart_Embedding, Bart_tokenizer
 
@@ -9,7 +10,7 @@ class MBart_BEiT_Model(nn.Module):
         self.config = config
         self.vision_encoder_pixel = Vision_Encode_Pixel(config)
         self.text_encoder = Bart_Encode_Feature(config) 
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = GLOBAL_DEVICE
         self.tokenizer = AutoTokenizer.from_pretrained(config.TEXT_EMBEDDING.PRETRAINED_NAME)
         self.embedding = Bart_Embedding(config)
 
@@ -23,6 +24,11 @@ class MBart_BEiT_Model(nn.Module):
         }
 
     def forward(self, questions, images, labels=None):
+        # Di chuyển dữ liệu sang device
+        images = images.to(self.device)
+        if labels is not None:
+            labels = labels.to(self.device)
+        
         encoding_pixel = self.vision_encoder_pixel(images)
         inputs = self.text_encoder(questions, None, labels)
         inputs.update({'pixel_values': encoding_pixel})
