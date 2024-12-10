@@ -1,4 +1,5 @@
 from common_imports import *
+from utils.device_utils import GLOBAL_DEVICE, select_device
 from models.VisionBartForConditionalGeneration import VisionBartForConditionalGeneration
 
 def Bart_tokenizer(config):
@@ -23,7 +24,7 @@ class Bart_Encode_Feature(nn.Module):
         self.max_input_length = config.TOKENIZER.MAX_INPUT_LENGTH
         self.max_target_length = config.TOKENIZER.MAX_TARGET_LENGTH
         self.truncation = config.TOKENIZER.TRUNCATION
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = GLOBAL_DEVICE
 
     def forward(self, input_text: List[str], text_pair: List[str]=None, answers: List[str]=None):
         encoded_inputs = self.tokenizer(
