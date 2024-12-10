@@ -1,4 +1,5 @@
 # models/vqa_model.py
+import types
 from common_imports import *
 from utils.device_utils import GLOBAL_DEVICE, select_device
 from models.Vision_Encode_Pixel import Vision_Encode_Pixel
