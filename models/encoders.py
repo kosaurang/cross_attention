@@ -1,10 +1,6 @@
 # models/encoders.py
-# import torch
-# import torch.nn as nn
-# from transformers import AutoTokenizer, BeitImageProcessor, AutoConfig
-# from PIL import Image
-# import os
 from common_imports import *
+from utils.device_utils import GLOBAL_DEVICE, select_device
 
 class Bart_Encode_Feature(nn.Module):
     def __init__(self, config):
@@ -14,7 +10,7 @@ class Bart_Encode_Feature(nn.Module):
         self.max_input_length = config.TOKENIZER.MAX_INPUT_LENGTH
         self.max_target_length = config.TOKENIZER.MAX_TARGET_LENGTH 
         self.truncation = config.TOKENIZER.TRUNCATION
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = GLOBAL_DEVICE
 
     def forward(self, input_text, text_pair=None, answers=None):
         encoded_inputs = self.tokenizer(
@@ -51,7 +47,7 @@ class Vision_Encode_Pixel(nn.Module):
     def __init__(self, config):
         super(Vision_Encode_Pixel, self).__init__()
         self.preprocessor = BeitImageProcessor.from_pretrained(config.VISION_EMBEDDING.PRETRAINED_NAME)
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = GLOBAL_DEVICE
 
     def forward(self, images):
         processed_images = self.preprocessor(
