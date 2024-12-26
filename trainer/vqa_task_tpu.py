@@ -28,7 +28,7 @@ class VQAConfig:
         # Training config
         self.TRAINING = SimpleNamespace(
             CHECKPOINT_PATH=yaml_config['TRAINING']['CHECKPOINT_PATH'],
-            LEARNING_RATE=yaml_config['TRAINING']['LEARNING_RATE'],
+            LEARNING_RATE=yaml_config['TRAINING']['LEARNING_RATE'], 
             WEIGHT_DECAY=yaml_config['TRAINING']['WEIGHT_DECAY'],
             EPOCHS=yaml_config['TRAINING']['EPOCHS'],
             BATCH_SIZE=yaml_config['TRAINING']['BATCH_SIZE'],
@@ -37,14 +37,32 @@ class VQAConfig:
             SAVE_PATH=yaml_config['TRAINING']['SAVE_PATH']
         )
         
-        # Model config
+        # Model config với cấu trúc phù hợp cho MBart_BEiT_Model
         self.MODEL = SimpleNamespace(
             NAME=yaml_config['MODEL']['NAME'],
             DEVICE=yaml_config['MODEL']['DEVICE'],
-            VISION_EMBEDDING=SimpleNamespace(**yaml_config['MODEL']['VISION_EMBEDDING']),
-            TEXT_EMBEDDING=SimpleNamespace(**yaml_config['MODEL']['TEXT_EMBEDDING']),
-            TOKENIZER=SimpleNamespace(**yaml_config['MODEL']['TOKENIZER']),
-            GENERATOR=SimpleNamespace(**yaml_config['MODEL']['GENERATOR'])
+            VISION_EMBEDDING=SimpleNamespace(
+                PRETRAINED_NAME=yaml_config['MODEL']['VISION_EMBEDDING']['PRETRAINED_NAME'],
+                D_PRETRAINED_FEATURE=yaml_config['MODEL']['VISION_EMBEDDING']['D_PRETRAINED_FEATURE']
+            ),
+            TEXT_EMBEDDING=SimpleNamespace(
+                PRETRAINED_NAME=yaml_config['MODEL']['TEXT_EMBEDDING']['PRETRAINED_NAME']
+            ),
+            TOKENIZER=SimpleNamespace(
+                PADDING=yaml_config['MODEL']['TOKENIZER']['PADDING'],
+                MAX_INPUT_LENGTH=yaml_config['MODEL']['TOKENIZER']['MAX_INPUT_LENGTH'],
+                MAX_TARGET_LENGTH=yaml_config['MODEL']['TOKENIZER']['MAX_TARGET_LENGTH'],
+                TRUNCATION=yaml_config['MODEL']['TOKENIZER']['TRUNCATION'],
+                RETURN_ATTENTION_MASK=yaml_config['MODEL']['TOKENIZER']['RETURN_ATTENTION_MASK']
+            ),
+            GENERATOR=SimpleNamespace(
+                MAX_LENGTH=yaml_config['MODEL']['GENERATOR']['MAX_LENGTH'],
+                MIN_LENGTH=yaml_config['MODEL']['GENERATOR']['MIN_LENGTH'],
+                NUM_BEAMS=yaml_config['MODEL']['GENERATOR']['NUM_BEAMS'],
+                LENGTH_PENALTY=yaml_config['MODEL']['GENERATOR']['LENGTH_PENALTY'],
+                NO_REPEAT_NGRAM_SIZE=yaml_config['MODEL']['GENERATOR']['NO_REPEAT_NGRAM_SIZE'],
+                EARLY_STOPPING=yaml_config['MODEL']['GENERATOR']['EARLY_STOPPING']
+            )
         )
         
         
@@ -58,6 +76,15 @@ class VQA_Task_TPU:
     
         # Lưu trữ config
         self.config = config
+        model_config = SimpleNamespace()
+        model_config.MODEL = SimpleNamespace(
+        NAME=self.config.MODEL.NAME,
+        DEVICE=self.config.MODEL.DEVICE,
+        VISION_EMBEDDING=self.config.MODEL.VISION_EMBEDDING,
+        TEXT_EMBEDDING=self.config.MODEL.TEXT_EMBEDDING,
+        TOKENIZER=self.config.MODEL.TOKENIZER,
+        GENERATOR=self.config.MODEL.GENERATOR
+        )
         
         # Thư mục lưu checkpoint
         os.makedirs(config.TRAINING.SAVE_PATH, exist_ok=True)
@@ -74,7 +101,7 @@ class VQA_Task_TPU:
     
         # Tokenizer và model
         self.tokenizer = Bart_tokenizer(self.config.MODEL)
-        self.base_model = MBart_BEiT_Model(self.config.MODEL)
+        self.base_model = MBart_BEiT_Model(model_config)
         self.base_model = self.base_model.to(self.device)
         #self.base_model = MBart_BEiT_Model(config.MODEL).to(self.device)
         #self.base_model = xm.send_cpu_data_to_device(self.base_model, self.device)
