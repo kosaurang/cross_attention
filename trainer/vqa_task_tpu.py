@@ -24,22 +24,27 @@ from models.Bart_Encode_Feature import Bart_tokenizer
 from types import SimpleNamespace
 
 class VQAConfig:
-    def __init__(self):
+    def __init__(self, yaml_config):
+        # Training config
         self.TRAINING = SimpleNamespace(
-            SAVE_PATH='/content/checkpoints',
-            CHECKPOINT_PATH='vqa_checkpoints',
-            EPOCHS=10,
-            PATIENCE=3,
-            METRIC_BEST='accuracy', 
-            LEARNING_RATE=1e-4,
-            WEIGHT_DECAY=1e-5,
-            BATCH_SIZE=32
+            CHECKPOINT_PATH=yaml_config['TRAINING']['CHECKPOINT_PATH'],
+            LEARNING_RATE=yaml_config['TRAINING']['LEARNING_RATE'],
+            WEIGHT_DECAY=yaml_config['TRAINING']['WEIGHT_DECAY'],
+            EPOCHS=yaml_config['TRAINING']['EPOCHS'],
+            BATCH_SIZE=yaml_config['TRAINING']['BATCH_SIZE'],
+            METRIC_BEST=yaml_config['TRAINING']['METRIC_BEST'],
+            PATIENCE=yaml_config['TRAINING']['PATIENCE'],
+            SAVE_PATH=yaml_config['TRAINING']['SAVE_PATH']
         )
         
+        # Model config
         self.MODEL = SimpleNamespace(
-            NAME='MBart_BEiT_VQA',
-            ARCHITECTURE='transformer',
-            # Thêm các tham số cấu hình model khác
+            NAME=yaml_config['MODEL']['NAME'],
+            DEVICE=yaml_config['MODEL']['DEVICE'],
+            VISION_EMBEDDING=SimpleNamespace(**yaml_config['MODEL']['VISION_EMBEDDING']),
+            TEXT_EMBEDDING=SimpleNamespace(**yaml_config['MODEL']['TEXT_EMBEDDING']),
+            TOKENIZER=SimpleNamespace(**yaml_config['MODEL']['TOKENIZER']),
+            GENERATOR=SimpleNamespace(**yaml_config['MODEL']['GENERATOR'])
         )
         
         
@@ -69,8 +74,10 @@ class VQA_Task_TPU:
     
         # Tokenizer và model
         self.tokenizer = Bart_tokenizer(config.MODEL)
-        self.base_model = MBart_BEiT_Model(config.MODEL).to(self.device)
-        self.base_model = xm.send_cpu_data_to_device(self.base_model, self.device)
+        self.base_model = MBart_BEiT_Model(config.MODEL)
+        self.base_model = self.base_model.to(self.device)
+        #self.base_model = MBart_BEiT_Model(config.MODEL).to(self.device)
+        #self.base_model = xm.send_cpu_data_to_device(self.base_model, self.device)
         
         # Optimizer
         self.optimizer = self.get_optimizer()
