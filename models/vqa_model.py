@@ -10,7 +10,7 @@ class MBart_BEiT_Model(nn.Module):
         self.config = config
         
         # Truy cập config generator an toàn hơn
-        generator_config = config.MODEL.GENERATOR
+        generator_config = self.config.MODEL.GENERATOR
         
         # Chuyển model sang device ngay khi khởi tạo
         self.vision_encoder_pixel = Vision_Encode_Pixel(config).to(GLOBAL_DEVICE)
