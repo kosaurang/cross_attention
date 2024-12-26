@@ -73,8 +73,8 @@ class VQA_Task_TPU:
         self.gradient_accumulation_steps = 4
     
         # Tokenizer và model
-        self.tokenizer = Bart_tokenizer(config.MODEL)
-        self.base_model = MBart_BEiT_Model(config.MODEL)
+        self.tokenizer = Bart_tokenizer(self.config.MODEL)
+        self.base_model = MBart_BEiT_Model(self.config.MODEL)
         self.base_model = self.base_model.to(self.device)
         #self.base_model = MBart_BEiT_Model(config.MODEL).to(self.device)
         #self.base_model = xm.send_cpu_data_to_device(self.base_model, self.device)
