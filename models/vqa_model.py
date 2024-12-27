@@ -8,9 +8,7 @@ class MBart_BEiT_Model(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        
-        # Truy cập config generator an toàn hơn
-        generator_config = self.config.MODEL.GENERATOR
+
         
         # Chuyển model sang device ngay khi khởi tạo
         self.vision_encoder_pixel = Vision_Encode_Pixel(config).to(GLOBAL_DEVICE)
@@ -20,14 +18,13 @@ class MBart_BEiT_Model(nn.Module):
         self.device = GLOBAL_DEVICE
         self.tokenizer = AutoTokenizer.from_pretrained(config.MODEL.TEXT_EMBEDDING.PRETRAINED_NAME)
         
-        # Chuyển generator_args thành dict từ CfgNode
         self.generator_args = {
-            'max_length': generator_config.MAX_LENGTH,
-            'min_length': generator_config.MIN_LENGTH,
-            'num_beams': generator_config.NUM_BEAMS,
-            'length_penalty': generator_config.LENGTH_PENALTY,
-            'no_repeat_ngram_size': generator_config.NO_REPEAT_NGRAM_SIZE,
-            'early_stopping': generator_config.EARLY_STOPPING,
+            'max_length': config.GENERATOR.MAX_LENGTH,
+            'min_length': config.GENERATOR.MIN_LENGTH,
+            'num_beams': config.GENERATOR.NUM_BEAMS,
+            'length_penalty': config.GENERATOR.LENGTH_PENALTY,
+            'no_repeat_ngram_size': config.GENERATOR.NO_REPEAT_NGRAM_SIZE,
+            'early_stopping': config.GENERATOR.EARLY_STOPPING,
         }
 
     def forward(self, questions, images, labels=None):
