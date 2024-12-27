@@ -28,6 +28,7 @@ from types import SimpleNamespace
 class VQA_Task_TPU:
     def __init__(self, config):
         # TPU-specific setup
+        self.config = config # Assign config to self.config
         self.device = xm.xla_device()
         self.world_size = xm.xrt_world_size()
         self.global_rank = xm.get_ordinal()
@@ -46,10 +47,10 @@ class VQA_Task_TPU:
         self.learning_rate = config.TRAINING.LEARNING_RATE
         self.batch_size = config.TRAINING.BATCH_SIZE
         self.gradient_accumulation_steps = 4
-    
+        print(config)
         # Tokenizer và model
-        self.tokenizer = Bart_tokenizer(self.config.MODEL)
-        self.base_model = MBart_BEiT_Model(model_config)
+        self.tokenizer = Bart_tokenizer(config.MODEL)
+        self.base_model = MBart_BEiT_Model(config.MODEL)
         self.base_model = self.base_model.to(self.device)
         #self.base_model = MBart_BEiT_Model(config.MODEL).to(self.device)
         #self.base_model = xm.send_cpu_data_to_device(self.base_model, self.device)
