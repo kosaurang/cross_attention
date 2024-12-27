@@ -16,7 +16,7 @@ class MBart_BEiT_Model(nn.Module):
         self.embedding = Bart_Embedding(config).to(GLOBAL_DEVICE)
         
         self.device = GLOBAL_DEVICE
-        self.tokenizer = AutoTokenizer.from_pretrained(config.MODEL.TEXT_EMBEDDING.PRETRAINED_NAME)
+        self.tokenizer = AutoTokenizer.from_pretrained(config.TEXT_EMBEDDING.PRETRAINED_NAME)
         
         self.generator_args = {
             'max_length': config.GENERATOR.MAX_LENGTH,
