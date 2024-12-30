@@ -80,7 +80,7 @@ class ViVQA_Dataset(torch.utils.data.Dataset):
     """
     Dataset class for the ViVQA dataset.
     """
-    def __init__(self, df, img_dir):
+    def __init__(self, df, img_dir, transform=None):
         self.df = df
         self.img_dir = img_dir
         # Nếu không có transform, sử dụng transform mặc định
