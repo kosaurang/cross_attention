@@ -2,7 +2,7 @@ import torch
 import torchvision.transforms as transforms
 from PIL import Image
 import torch_xla.core.xla_model as xm
-
+from common_imports import *
 
 def load_and_clean_data(train_path, test_path):
     """
